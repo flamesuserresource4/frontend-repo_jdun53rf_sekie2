@@ -1,59 +1,66 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import Editor from "./components/Editor";
 import SuggestionPanel from "./components/SuggestionPanel";
 
-// Simple client-side spell suggestion mock for demo purposes.
-// In a full implementation, these would come from backend APIs.
-const DICT = [
-  "accommodate","acknowledgment","occurrence","recommend","definitely","separate","receive","grammar","across","believe","necessary","their","there","they're","language","assistant","analysis","development","autocorrect","probability","suggestion"
-];
-
-function rankSuggestions(input) {
-  const lower = input.toLowerCase();
-  return DICT.map((w) => ({
-    text: w,
-    score: similarity(lower, w.toLowerCase()),
-  }))
-    .filter((s) => s.score > 0.2)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
-}
-
-function similarity(a, b) {
-  // Jaccard on character bigrams (quick and stable for demo)
-  const bigrams = (s) => new Set(Array.from({ length: Math.max(0, s.length - 1) }, (_, i) => s.slice(i, i + 2)));
-  const A = bigrams(a);
-  const B = bigrams(b);
-  const inter = [...A].filter((x) => B.has(x)).length;
-  const union = new Set([...A, ...B]).size || 1;
-  return inter / union;
-}
+const BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
 function App() {
   const [text, setText] = useState("");
   const [language, setLanguage] = useState("en");
   const [activeIndex, setActiveIndex] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  const abortRef = useRef(null);
 
   const lastWord = useMemo(() => {
     const parts = text.split(/\s+/).filter(Boolean);
     return parts[parts.length - 1] || "";
   }, [text]);
 
-  const suggestions = useMemo(() => {
-    if (!lastWord || lastWord.length < 2) return [];
-    return rankSuggestions(lastWord);
-  }, [lastWord]);
-
   useEffect(() => {
     setActiveIndex(0);
   }, [lastWord]);
 
+  useEffect(() => {
+    // Fetch NLTK-based suggestions from backend for the current text
+    const controller = new AbortController();
+    if (abortRef.current) abortRef.current.abort();
+    abortRef.current = controller;
+
+    async function fetchSuggestions() {
+      if (!lastWord || lastWord.length < 1) {
+        setSuggestions([]);
+        return;
+      }
+      try {
+        const res = await fetch(`${BASE_URL}/api/suggest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, language, limit: 5 }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []);
+      } catch (e) {
+        if (e.name !== "AbortError") {
+          setSuggestions([]);
+        }
+      }
+    }
+
+    // slight debounce to avoid firing on every keystroke
+    const t = setTimeout(fetchSuggestions, 150);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
+  }, [text, language, lastWord]);
+
   const handleSelect = (s) => {
     const parts = text.split(/(\s+)/); // keep spaces
-    // replace last non-space token
     for (let i = parts.length - 1; i >= 0; i--) {
       if (!/^\s+$/.test(parts[i])) {
         parts[i] = s.text;
@@ -106,6 +113,7 @@ function App() {
                 <p className="mb-2 font-medium">How it works</p>
                 <ul className="list-disc pl-5 space-y-1">
                   <li>Suggestions update in real-time as you type.</li>
+                  <li>Powered by a backend engine using NLTK distance metrics.</li>
                   <li>Use the arrows or Cmd/Ctrl + Arrow keys to cycle.</li>
                   <li>Click a suggestion to apply it to the last word.</li>
                 </ul>
@@ -131,7 +139,7 @@ function App() {
         >
           <div className="w-full max-w-lg bg-white rounded-2xl p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold mb-2">Settings</h3>
-            <p className="text-sm text-gray-600">This demo focuses on the UI. In a full version, connect to the backend APIs for hybrid rule + ML corrections, dictionaries, feedback, and multilingual support.</p>
+            <p className="text-sm text-gray-600">This version connects the editor to a backend suggestion API built with NLTK for real-time word-level corrections. Extendable to grammar and style shortly.</p>
             <div className="mt-4 flex justify-end">
               <button
                 type="button"
